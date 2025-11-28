@@ -43,7 +43,7 @@ jobs:
         run: |
           cd infra/terraform
           terraform plan -detailed-exitcode -out=tfplan || echo "exit_code=$?" >> $GITHUB_OUTPUT
-        continue-on-error: true
+        
 
       - name: Check for Drift
         id: drift
@@ -74,6 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform-plan
     environment: production
+    if: needs.terraform-plan.result == 'success'
     
     steps:
       - name: Checkout code
