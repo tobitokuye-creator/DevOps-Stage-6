@@ -1,28 +1,33 @@
-# Get latest Ubuntu AMI
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+# Use a specific Ubuntu 22.04 AMI for eu-north-1
+locals {
+  ubuntu_ami = "ami-0705384c0b33c194c" # Ubuntu 22.04 LTS for eu-north-1
 }
+
+# Uncomment this if you fix IAM permissions
+# data "aws_ami" "ubuntu" {
+#   most_recent = true
+#   owners      = ["099720109477"] # Canonical
+# 
+#   filter {
+#     name   = "name"
+#     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+#   }
+# 
+#   filter {
+#     name   = "virtualization-type"
+#     values = ["hvm"]
+#   }
+# }
 
 # Create SSH Key Pair
-resource "aws_key_pair" "deployer" {
-  key_name   = var.key_name
-  public_key = tls_private_key.ssh.public_key_openssh
-}
-
 resource "tls_private_key" "ssh" {
   algorithm = "RSA"
   rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "deployer" {
+  key_name   = var.key_name
+  public_key = tls_private_key.ssh.public_key_openssh
 }
 
 # Save private key locally
@@ -34,7 +39,7 @@ resource "local_file" "private_key" {
 
 # Create EC2 Instance
 resource "aws_instance" "app_server" {
-  ami           = data.aws_ami.ubuntu.id
+  ami           = local.ubuntu_ami  # Changed from data.aws_ami.ubuntu.id
   instance_type = var.instance_type
   key_name      = aws_key_pair.deployer.key_name
 
@@ -46,18 +51,19 @@ resource "aws_instance" "app_server" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh", {
-    domain_name  = var.domain_name
-    github_repo  = var.github_repo
+    domain_name = var.domain_name
+    github_repo = var.github_repo
   })
 
   tags = {
-    Name = "DevOps-Stage6-Server"
+    Name        = "DevOps-Stage6-Server"
     Environment = "production"
-    Project = "TodoApp"
+    Project     = "TodoApp"
   }
 
   lifecycle {
-    create_before_destroy = true
+    create_before_destroy = false
+    ignore_changes        = [user_data]
   }
 }
 
@@ -69,6 +75,8 @@ resource "aws_eip" "app_eip" {
   tags = {
     Name = "DevOps-Stage6-EIP"
   }
+
+  depends_on = [aws_instance.app_server]
 }
 
 # Generate Ansible Inventory
@@ -82,15 +90,19 @@ resource "local_file" "ansible_inventory" {
   depends_on = [aws_eip.app_eip]
 }
 
-# Trigger Ansible Provisioning
+# Provisioner to run Ansible (runs only after first creation)
 resource "null_resource" "run_ansible" {
   triggers = {
     instance_id = aws_instance.app_server.id
-    always_run  = timestamp()
   }
 
   provisioner "local-exec" {
-    command = "sleep 60 && cd ${path.module}/../ansible && ansible-playbook -i inventory.ini playbook.yml"
+    command = <<-EOT
+      echo "Waiting for server to be ready..."
+      sleep 90
+      echo "Running Ansible playbook..."
+      cd ${path.module}/../ansible && ansible-playbook -i inventory.ini playbook.yml -vv
+    EOT
   }
 
   depends_on = [

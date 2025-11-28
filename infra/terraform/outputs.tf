@@ -22,3 +22,9 @@ output "application_url" {
   description = "Application URL"
   value       = "https://${var.domain_name}"
 }
+
+output "private_key_pem" {
+  description = "Private SSH key (sensitive)"
+  value       = tls_private_key.ssh.private_key_pem
+  sensitive   = true
+}

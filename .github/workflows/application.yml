@@ -15,9 +15,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-infrastructure:
+    name: Check if Infrastructure Exists
+    runs-on: ubuntu-latest
+    outputs:
+      has_server: ${{ steps.check.outputs.has_server }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Check Infrastructure State
+        id: check
+        run: |
+          cd infra/terraform
+          terraform init
+          
+          # Check if state exists and has outputs
+          if terraform output server_public_ip 2>/dev/null | grep -q '[0-9]'; then
+            echo "has_server=true" >> $GITHUB_OUTPUT
+            echo "✅ Infrastructure exists"
+          else
+            echo "has_server=false" >> $GITHUB_OUTPUT
+            echo "⚠️  Infrastructure not deployed yet"
+          fi
+
   deploy-app:
     name: Deploy Application
     runs-on: ubuntu-latest
+    needs: check-infrastructure
+    if: needs.check-infrastructure.outputs.has_server == 'true'
     
     steps:
       - name: Checkout code
@@ -40,11 +79,7 @@ jobs:
         run: |
           cd infra/terraform
           terraform init
-          SERVER_IP=$(terraform output -raw server_public_ip 2>/dev/null || echo "")
-          if [ -z "$SERVER_IP" ]; then
-            echo "❌ Could not retrieve server IP. Infrastructure may not be deployed."
-            exit 1
-          fi
+          SERVER_IP=$(terraform output -raw server_public_ip)
           echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
           echo "🖥️  Deploying to server: $SERVER_IP"
 
@@ -52,11 +87,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           cd infra/terraform
-          if [ ! -f devops-key.pem ]; then
-            echo "❌ SSH key not found. Running terraform refresh..."
-            terraform refresh
-          fi
-          cp devops-key.pem ~/.ssh/
+          terraform output -raw private_key_pem > ~/.ssh/devops-key.pem
           chmod 600 ~/.ssh/devops-key.pem
 
       - name: Wait for Server to be Ready
@@ -137,6 +168,20 @@ jobs:
           echo "🔑 Login Credentials:"
           echo "  - Username: admin"
           echo "  - Password: Admin123"
+
+  notify-no-infrastructure:
+    name: No Infrastructure Deployed
+    runs-on: ubuntu-latest
+    needs: check-infrastructure
+    if: needs.check-infrastructure.outputs.has_server == 'false'
+    
+    steps:
+      - name: Notify User
+        run: |
+          echo "⚠️  Cannot deploy application - infrastructure not found"
           echo ""
-          echo "⚠️  Remember to update DNS if not done already:"
-          echo "  mlle.crabdance.com → ${{ steps.get_ip.outputs.ip }}"
+          echo "Please run the Infrastructure Deployment workflow first:"
+          echo "1. Go to Actions → Infrastructure Deployment"
+          echo "2. Click 'Run workflow'"
+          echo "3. Wait for infrastructure to be created"
+          echo "4. Then retry this application deployment"
