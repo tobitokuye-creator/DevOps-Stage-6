@@ -31,7 +31,7 @@ jobs:
           aws-region: eu-north-1
 
       - name: Setup Terraform (to get server IP)
-        uses: hashicorp/setup-terraform@v3
+        uses: dflook/terraform-setup@v3
 
       - name: Get Server IP from Terraform
         id: get_ip
