@@ -83,7 +83,7 @@ resource "aws_eip" "app_eip" {
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/inventory.tpl", {
     server_ip   = aws_eip.app_eip.public_ip
-    private_key = "${path.module}/devops-key.pem"
+    private_key = abspath("${path.module}/devops-key.pem")
   })
   filename = "${path.module}/../ansible/inventory.ini"
 
