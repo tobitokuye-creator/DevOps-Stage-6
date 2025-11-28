@@ -1,0 +1,13 @@
+---
+- name: Deploy DevOps Stage 6 Application
+  hosts: app_servers
+  become: yes
+  vars:
+    domain_name: "mlle.crabdance.com"
+    github_repo: "https://github.com/tobitokuye-creator/DevOps-Stage-6.git"
+    app_dir: "/home/ubuntu/DevOps-Stage-6"
+    email_address: "kuyeoluwatobi88@gmail.com"
+
+  roles:
+    - dependencies
+    - deploy

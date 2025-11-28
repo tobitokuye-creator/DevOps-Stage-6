@@ -1,0 +1,106 @@
+---
+- name: Check if application directory exists
+  stat:
+    path: "{{ app_dir }}"
+  register: app_dir_stat
+
+- name: Clone application repository
+  git:
+    repo: "{{ github_repo }}"
+    dest: "{{ app_dir }}"
+    version: main
+    force: yes
+  become_user: ubuntu
+  when: not app_dir_stat.stat.exists
+
+- name: Pull latest changes from repository
+  git:
+    repo: "{{ github_repo }}"
+    dest: "{{ app_dir }}"
+    version: main
+    force: yes
+  become_user: ubuntu
+  when: app_dir_stat.stat.exists
+
+- name: Ensure .env file exists with correct values
+  copy:
+    dest: "{{ app_dir }}/.env"
+    content: |
+      # Domain & SSL
+      DOMAIN={{ domain_name }}
+      EMAIL_ADDRESS={{ email_address }}
+      
+      # JWT Secret (shared across services)
+      JWT_SECRET=myfancysecret
+      
+      # Redis Configuration
+      REDIS_HOST=redis-queue
+      REDIS_PORT=6379
+      REDIS_CHANNEL=log_channel
+      
+      # Frontend
+      PORT=8080
+      AUTH_API_ADDRESS=http://auth-api:8081
+      TODOS_API_ADDRESS=http://todos-api:8082
+      
+      # Auth API
+      AUTH_API_PORT=8081
+      USERS_API_ADDRESS=http://users-api:8083
+      
+      # Users API
+      SERVER_PORT=8083
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Stop existing containers
+  command: docker-compose down
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: ubuntu
+  ignore_errors: yes
+
+- name: Remove unused Docker resources
+  command: docker system prune -af --volumes
+  become_user: ubuntu
+  ignore_errors: yes
+
+- name: Build and start Docker containers
+  command: docker-compose up -d --build --remove-orphans
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: ubuntu
+  register: compose_output
+
+- name: Wait for services to be healthy
+  pause:
+    seconds: 45
+
+- name: Check running containers
+  command: docker ps -a
+  register: docker_ps
+  changed_when: false
+
+- name: Display running containers
+  debug:
+    var: docker_ps.stdout_lines
+
+- name: Check container logs
+  shell: |
+    echo "=== Auth API Logs ==="
+    docker logs auth-api --tail 20
+    echo "=== Todos API Logs ==="
+    docker logs todos-api --tail 20
+    echo "=== Users API Logs ==="
+    docker logs users-api --tail 20
+    echo "=== Frontend Logs ==="
+    docker logs frontend --tail 20
+    echo "=== Traefik Logs ==="
+    docker logs traefik --tail 30
+  register: all_logs
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display service logs
+  debug:
+    var: all_logs.stdout_lines
