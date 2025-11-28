@@ -30,34 +30,113 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      - name: Setup Terraform (to get server IP)
-        uses: dflook/terraform-setup@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
       - name: Get Server IP from Terraform
         id: get_ip
         run: |
           cd infra/terraform
           terraform init
-          echo "server_ip=$(terraform output -raw server_public_ip)" >> $GITHUB_OUTPUT
+          SERVER_IP=$(terraform output -raw server_public_ip 2>/dev/null || echo "")
+          if [ -z "$SERVER_IP" ]; then
+            echo "❌ Could not retrieve server IP. Infrastructure may not be deployed."
+            exit 1
+          fi
+          echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
+          echo "🖥️  Deploying to server: $SERVER_IP"
 
-      - name: Setup SSH
+      - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
           cd infra/terraform
+          if [ ! -f devops-key.pem ]; then
+            echo "❌ SSH key not found. Running terraform refresh..."
+            terraform refresh
+          fi
           cp devops-key.pem ~/.ssh/
           chmod 600 ~/.ssh/devops-key.pem
 
-      - name: Deploy via SSH
+      - name: Wait for Server to be Ready
         run: |
-          ssh -i ~/.ssh/devops-key.pem -o StrictHostKeyChecking=no ubuntu@${{ steps.get_ip.outputs.server_ip }} << 'EOF'
-            cd /home/ubuntu/DevOps-Stage-6
-            git pull origin main
-            docker-compose down
-            docker-compose up -d --build
-            docker ps
-          EOF
+          echo "⏳ Checking server availability..."
+          for i in {1..30}; do
+            if ssh -i ~/.ssh/devops-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@${{ steps.get_ip.outputs.ip }} "echo 'Server ready'" 2>/dev/null; then
+              echo "✅ Server is ready!"
+              break
+            fi
+            echo "Attempt $i/30: Server not ready yet, waiting..."
+            sleep 10
+          done
 
-      - name: Verify Deployment
+      - name: Deploy Application
         run: |
-          echo "✅ Application deployed successfully!"
-          echo "🌐 URL: https://mlle.crabdance.com"
+          echo "🚀 Deploying application..."
+          ssh -i ~/.ssh/devops-key.pem -o StrictHostKeyChecking=no ubuntu@${{ steps.get_ip.outputs.ip }} << 'ENDSSH'
+            set -e
+            cd /home/ubuntu/DevOps-Stage-6
+            
+            echo "📥 Pulling latest changes..."
+            git pull origin main
+            
+            echo "🛑 Stopping existing containers..."
+            docker-compose down || true
+            
+            echo "🧹 Cleaning up old images..."
+            docker system prune -af || true
+            
+            echo "🏗️  Building and starting containers..."
+            docker-compose up -d --build --remove-orphans
+            
+            echo "⏳ Waiting for containers to be healthy..."
+            sleep 30
+            
+            echo "📊 Container status:"
+            docker-compose ps
+            
+            echo "✅ Deployment completed successfully!"
+          ENDSSH
+
+      - name: Verify Services
+        run: |
+          echo "🔍 Verifying services..."
+          ssh -i ~/.ssh/devops-key.pem ubuntu@${{ steps.get_ip.outputs.ip }} << 'ENDSSH'
+            echo "=== Running Containers ==="
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            echo ""
+            echo "=== Health Check ==="
+            
+            # Check if containers are running
+            EXPECTED_CONTAINERS=("traefik" "frontend" "auth-api" "todos-api" "users-api" "redis-queue" "log-processor")
+            
+            for container in "${EXPECTED_CONTAINERS[@]}"; do
+              if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+                echo "✅ $container is running"
+              else
+                echo "❌ $container is NOT running"
+              fi
+            done
+          ENDSSH
+
+      - name: Display Access Information
+        run: |
+          echo "=================================="
+          echo "🎉 Application Deployment Complete!"
+          echo "=================================="
+          echo ""
+          echo "🌐 Access your application:"
+          echo "  - Frontend: https://mlle.crabdance.com"
+          echo "  - Auth API: https://mlle.crabdance.com/api/auth"
+          echo "  - Todos API: https://mlle.crabdance.com/api/todos"
+          echo "  - Users API: https://mlle.crabdance.com/api/users"
+          echo "  - Traefik Dashboard: http://${{ steps.get_ip.outputs.ip }}:8888"
+          echo ""
+          echo "🔑 Login Credentials:"
+          echo "  - Username: admin"
+          echo "  - Password: Admin123"
+          echo ""
+          echo "⚠️  Remember to update DNS if not done already:"
+          echo "  mlle.crabdance.com → ${{ steps.get_ip.outputs.ip }}"
