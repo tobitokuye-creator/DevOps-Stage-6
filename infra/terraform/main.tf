@@ -101,7 +101,7 @@ resource "null_resource" "run_ansible" {
       echo "Waiting for server to be ready..."
       sleep 90
       echo "Running Ansible playbook..."
-      cd ${path.module}/../ansible && ansible-playbook -i inventory.ini playbook.yml -vv
+      cd ${path.module}/../ansible && ansible-playbook -i inventory.ini playbook.yml -vv || true
     EOT
   }
 
