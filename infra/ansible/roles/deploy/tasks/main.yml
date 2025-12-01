@@ -60,8 +60,15 @@
   become_user: ubuntu
   ignore_errors: yes
 
-- name: Remove unused Docker resources
-  command: docker system prune -af --volumes
+- name: Remove only stopped containers and dangling images
+  command: docker system prune -f
+  become_user: ubuntu
+  ignore_errors: yes
+
+- name: Pull base images first
+  command: docker-compose pull
+  args:
+    chdir: "{{ app_dir }}"
   become_user: ubuntu
   ignore_errors: yes
 
@@ -71,6 +78,9 @@
     chdir: "{{ app_dir }}"
   become_user: ubuntu
   register: compose_output
+  retries: 3
+  delay: 10
+  until: compose_output.rc == 0
 
 - name: Wait for services to be healthy
   pause:
@@ -85,22 +95,40 @@
   debug:
     var: docker_ps.stdout_lines
 
-- name: Check container logs
+- name: Verify all expected containers are running
   shell: |
-    echo "=== Auth API Logs ==="
-    docker logs auth-api --tail 20
-    echo "=== Todos API Logs ==="
-    docker logs todos-api --tail 20
-    echo "=== Users API Logs ==="
-    docker logs users-api --tail 20
-    echo "=== Frontend Logs ==="
-    docker logs frontend --tail 20
-    echo "=== Traefik Logs ==="
-    docker logs traefik --tail 30
-  register: all_logs
+    echo "Checking container health..."
+    EXPECTED=("traefik" "frontend" "auth-api" "todos-api" "users-api" "redis-queue" "log-processor")
+    
+    for container in "${EXPECTED[@]}"; do
+      if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+        STATUS=$(docker inspect --format='{{.State.Status}}' $container)
+        echo "✅ $container: $STATUS"
+      else
+        echo "❌ $container: NOT FOUND"
+      fi
+    done
+  register: health_check
   changed_when: false
   ignore_errors: yes
 
-- name: Display service logs
+- name: Display health check results
   debug:
-    var: all_logs.stdout_lines
+    var: health_check.stdout_lines
+
+- name: Get container logs if any failed
+  shell: |
+    echo "=== Checking for failed containers ==="
+    for container in $(docker ps -a --filter "status=exited" --format "{{.Names}}"); do
+      echo "--- Logs for $container ---"
+      docker logs $container --tail 50
+    done
+  register: failed_logs
+  changed_when: false
+  ignore_errors: yes
+  when: compose_output.rc != 0
+
+- name: Display failed container logs
+  debug:
+    var: failed_logs.stdout_lines
+  when: compose_output.rc != 0
