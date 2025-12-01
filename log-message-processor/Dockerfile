@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies for thriftpy
-RUN apt-get update && apt-get install -y \
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
     libssl-dev \
