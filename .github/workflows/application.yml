@@ -87,6 +87,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           cd infra/terraform
+          # Ensure the key is named correctly for subsequent steps
           terraform output -raw private_key_pem > ~/.ssh/devops-key.pem
           chmod 600 ~/.ssh/devops-key.pem
 
@@ -120,9 +121,7 @@ jobs:
             
             echo "🏗️  Building and starting containers..."
             docker-compose up -d --build --remove-orphans
-            
-            echo "⏳ Waiting for containers to be healthy..."
-            sleep 30
+                      
             
             echo "📊 Container status:"
             docker-compose ps
